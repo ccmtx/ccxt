@@ -30,6 +30,7 @@ module.exports = class huobipro extends Exchange {
                 'fetchTradingLimits': true,
                 'withdraw': true,
                 'fetchCurrencies': true,
+                'fetchWithdrawFee': true,
             },
             'timeframes': {
                 '1m': '1min',
@@ -67,6 +68,7 @@ module.exports = class huobipro extends Exchange {
                         'common/timestamp', // 查询系统当前时间
                         'common/exchange', // order limits
                         'settings/currencys', // ?language=en-US
+                        'dw/withdraw-virtual/fee', // withdraw fees ?currency=aaa
                     ],
                 },
                 'private': {
@@ -330,11 +332,12 @@ module.exports = class huobipro extends Exchange {
         };
     }
 
-    async fetchTrades (symbol, since = undefined, limit = 2000, params = {}) {
+    async fetchTrades (symbol, since = undefined, limit = undefined, params = {}) {
         await this.loadMarkets ();
         let market = this.market (symbol);
         let request = {
             'symbol': market['id'],
+            'size': 1000,
         };
         if (typeof limit !== 'undefined')
             request['size'] = limit;
@@ -398,48 +401,25 @@ module.exports = class huobipro extends Exchange {
     }
 
     async fetchCurrencies (params = {}) {
-        let response = await this.publicGetSettingsCurrencys (this.extend ({
-            'language': this.options['language'],
-        }, params));
-        let currencies = response['data'];
+        params.language = params.language || 'en-US';
+        let currencies = await this.publicGetSettingsCurrencys (params);
         let result = {};
-        for (let i = 0; i < currencies.length; i++) {
-            let currency = currencies[i];
-            //
-            //  {                     name: "ctxc",
-            //              'display-name': "CTXC",
-            //        'withdraw-precision':  8,
-            //             'currency-type': "eth",
-            //        'currency-partition': "pro",
-            //             'support-sites':  null,
-            //                'otc-enable':  0,
-            //        'deposit-min-amount': "2",
-            //       'withdraw-min-amount': "4",
-            //            'show-precision': "8",
-            //                      weight: "2988",
-            //                     visible:  true,
-            //              'deposit-desc': "Please don’t deposit any other digital assets except CTXC t…",
-            //             'withdraw-desc': "Minimum withdrawal amount: 4 CTXC. !>_<!For security reason…",
-            //           'deposit-enabled':  true,
-            //          'withdraw-enabled':  true,
-            //    'currency-addr-with-tag':  false,
-            //             'fast-confirms':  15,
-            //             'safe-confirms':  30                                                             }
-            //
-            let id = this.safeValue (currency, 'name');
-            let precision = this.safeInteger (currency, 'withdraw-precision');
-            let code = this.commonCurrencyCode (id.toUpperCase ());
-            let active = currency['visible'] && currency['deposit-enabled'] && currency['withdraw-enabled'];
+        for (let i = 0; i < currencies.data.length; i++) {
+            let currency = currencies.data[i];
+            let name = this.safeValue (currency, 'name');
+            let precision = +this.safeValue (currency, 'show-precision');
+            let code = this.commonCurrencyCode (name.toUpperCase ());
             result[code] = {
-                'id': id,
+                'id': name,
                 'code': code,
                 'type': 'crypto',
-                // 'payin': currency['deposit-enabled'],
-                // 'payout': currency['withdraw-enabled'],
-                // 'transfer': undefined,
+                'payin': currency['deposit-enabled'],
+                'payout': currency['withdraw-enabled'],
+                'transfer': undefined,
+                'info': currency,
                 'name': currency['display-name'],
-                'active': active,
-                'status': active ? 'ok' : 'disabled',
+                'active': currency.visible,
+                'status': currency.visible ? 'ok' : 'disabled',
                 'fee': undefined, // todo need to fetch from fee endpoint
                 'precision': precision,
                 'limits': {
@@ -455,19 +435,20 @@ module.exports = class huobipro extends Exchange {
                         'min': undefined,
                         'max': undefined,
                     },
-                    'deposit': {
-                        'min': this.safeFloat (currency, 'deposit-min-amount'),
-                        'max': Math.pow (10, precision),
-                    },
                     'withdraw': {
-                        'min': this.safeFloat (currency, 'withdraw-min-amount'),
+                        'min': undefined,
                         'max': Math.pow (10, precision),
                     },
                 },
-                'info': currency,
             };
         }
         return result;
+    }
+
+    async fetchWithdrawFee (currency) {
+        currency = currency.toLowerCase();
+        let info = await this.publicGetDwWithdrawVirtualFee ({ currency });
+        return { 'fee': +info.data, info };
     }
 
     async fetchBalance (params = {}) {
@@ -590,7 +571,10 @@ module.exports = class huobipro extends Exchange {
             'filled': filled,
             'remaining': remaining,
             'status': status,
-            'fee': undefined,
+            'fee': {
+                'cost': parseFloat (order['field-fees']),
+                'currency': market ? market['quote'] : undefined,
+            },
         };
         return result;
     }
