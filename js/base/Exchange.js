@@ -321,11 +321,7 @@ module.exports = class Exchange {
                     })
                     .then (response => this.handleRestResponse (response, url, method, headers, body))
 
-            return timeout (this.timeout, promise).catch (e => {
-                if (e instanceof TimedOut)
-                    throw new RequestTimeout (this.id + ' ' + method + ' ' + url + ' request timed out (' + this.timeout + ' ms)')
-                throw e
-            })
+            return promise
         }
     }
 
